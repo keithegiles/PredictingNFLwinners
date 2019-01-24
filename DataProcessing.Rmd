@@ -17,7 +17,7 @@ The dataset was downloaded from a publicly available dataset from kaggle ("https
 
 ```{r import and convert raw data, eval = F}
 library(jsonlite)
-NFLgamesJSON <- fromJSON("games_1512362753.8735218.json")
+NFLgamesJSON <- fromJSON("/data/kegiles/ToyData/games_1512362753.8735218.json")
 NFLgamesJSON <- lapply(NFLgamesJSON, function(x) {
 x[sapply(x, is.null)] <- NA
 unlist(x)})
@@ -101,14 +101,15 @@ DifferentialDF <- cbind(tmpJoiner, tmpDiff)
 DifferentialDF <- DifferentialDF[order(DifferentialDF$Home,DifferentialDF$date),]
 DifferentialDF[5:6] <- lapply(DifferentialDF[5:6], function(x) as.numeric(x))
 DifferentialDF$Delta_Score <- DifferentialDF$HomeScore - DifferentialDF$AwayScore
-DifferentialDF <- subset(DifferentialDF, select = -c(UniqueGameID,date,Home,Away,HomeScore,AwayScore))
+DifferentialDF <- subset(DifferentialDF, select = -c(UniqueGameID,Home,Away,HomeScore,AwayScore))
 #The last step is to calculate the 5 game rolling average for each team 
 tmp <- DifferentialDF
 library(zoo)
-tmp[1:35] <- lapply(DifferentialDF[1:35], function(x) rollmean(x = x, k = 5, align = "right", fill = NA))
+tmp[2:36] <- lapply(DifferentialDF[2:36], function(x) rollmean(x = x, k = 5, align = "right", fill = NA))
 DifferentialDF_MA5 <- na.omit(tmp)
 DifferentialDF_MA5[1:5,1:5]
 head(DifferentialDF_MA5)
+write.table(DifferentialDF_MA5, "/home/kegiles/ToyData/PredictingNFLwinners/DifferentialStats.tsv",sep = "\t",row.names = F,col.names = T, quote = F)
 ```
 
 We have finally created a dataframe which has the rolling average in 35 statistics over the home teams previous 5 games and the corresponding net points in the game. And most importantly **These stats will be available at the beginning of each game, and can be used to actually predict game outcomes**. This wil be addressed in the next notebook.
