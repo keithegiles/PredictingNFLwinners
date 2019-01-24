@@ -1,0 +1,114 @@
+---
+title: "NFL prediction"
+author: "Keith E Giles"
+date: "1/23/2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Prediction of straight-up winners of NFL games. 
+The goal of this project is to predict the winner of NFL games.  
+The dataset was downloaded from a publicly available dataset from kaggle ("https://www.kaggle.com/zynicide/nfl-football-player-stats"). The data was made available in $\textbf{JSON}$ format, and I converted it into a dataframe upon being imported into $\textbf{R}$.  
+
+```{r import and convert raw data, eval = F}
+library(jsonlite)
+NFLgamesJSON <- fromJSON("games_1512362753.8735218.json")
+NFLgamesJSON <- lapply(NFLgamesJSON, function(x) {
+x[sapply(x, is.null)] <- NA
+unlist(x)})
+tmp <- do.call("rbind", NFLgamesJSON)
+tmp <- t(tmp)
+tmpDF <- data.frame(tmp)
+AllGames <- tmpDF
+head(AllGames)
+dim(AllGames)
+```
+This dataset has stats from over 1.02m players and 46 features, which is a mix of player stats and data about the game.  The next goal is convert this player-specific data into Team-specific data in two steps:
+
+1.    Create a **TeamGameID** to group each teams stats for a given game.
+2.    Create a **UniqueGameID** for each game(there should be only 2 per game, one per team)
+3.    Decide on relevant stats
+4.    Isolate the Home teams Stats
+5.    Isolate the Away team stats
+6.    Join these two stats using **UniqueGameID** as the unique identifier
+7.    Calculate the stat differential for each game
+8.    Sort by team and date, calculate rolling mean for each team.  
+9.    Drop **"game_location==A"**, which is redundant with the teams swapped and differentials inverted  
+10.   Use this as a training set  to: 
+         a.  predict score
+         b.  predict outcome
+
+```{r feature engineering and grouping, eval= F}
+#load the dplyr package to perform grouping operations
+library(plyr)
+library(dplyr)
+AllGames[1:46] <- lapply(AllGames[1:46], function(x) as.character(x))
+#create unique ID by merging together game-related features
+#This unique ID has to be the same for the redundant entries of each game, with the home team first, then the date, then the away team.  
+AllGames$TeamID <- paste0(AllGames$team,AllGames$date,AllGames$opponent)
+AllGames[12:46] <- lapply(AllGames[12:46], function(x) as.numeric(as.character(x)))
+AllGames[1:5,1:5]
+colnames(AllGames)
+#The columns in the AllGames dataframe
+dim(AllGames)
+#The dimensions of the AllGames dataframe:
+```
+
+We now have created a new dataframe **GameSummary** that has grouped all the stats from each player from each game  from each team. In order to determine the Net Stats or "stat differential", we need to join each teams stats with their opponents stats.  This requires generating a **GameUniqueID**. You'll know this was done proprely is there are two instances of each **GameUniqueID**.  
+```{r create unique game ID, eval = F}
+GameSummary <- group_by(AllGames[c(7,12:47)], TeamID, game_location) %>% summarise_all(funs(sum))
+#First we need to join a few of the columns that were dropped when we used groupBy to create the GameSummary dataframe. These can be joined using the TeamID field.
+tmpDF <- AllGames[c(3,6,8,10,11,47)]
+tmpGrouped <- group_by(tmpDF, TeamID) %>% summarise_all(funs(first))
+GameSummary <- merge(x = GameSummary,y = tmpGrouped,by = "TeamID")
+#Now we have the total team stats for each game AND both team names and the date and score. We can now move on to make a unique game ID
+GameSummary$UniqueGameID <- ifelse(GameSummary$game_location == "H", paste0(GameSummary$team, GameSummary$date,GameSummary$opponent), paste0(GameSummary$opponent,GameSummary$date,GameSummary$team))
+#the above code created the UniqueGameID, which puts the home team first.
+#Now we can separate into Home and Away teams
+HomeTeams <- subset(GameSummary, game_location == "H")
+AwayTeams <- subset(GameSummary, game_location == "A")
+colnames(HomeTeams)[3:37] <- paste0("Home_",colnames(HomeTeams)[3:37])
+colnames(AwayTeams)[3:37] <- paste0("Away_", colnames(AwayTeams)[3:37])
+#change player and opponent to home and away, remember this needs to be inverted for the away team dataset
+colnames(HomeTeams) <- gsub("player_team_score","HomeScore",colnames(HomeTeams))
+colnames(HomeTeams) <- gsub("opponent_score","AwayScore",colnames(HomeTeams))
+colnames(AwayTeams) <- gsub("player_team_score","AwayScore",colnames(AwayTeams))
+colnames(AwayTeams) <- gsub("opponent_score","HomeScore",colnames(AwayTeams))
+colnames(HomeTeams) <- gsub("team","Home",colnames(HomeTeams))
+colnames(HomeTeams) <- gsub("opponent","Away",colnames(HomeTeams))
+colnames(AwayTeams) <- gsub("team","Away",colnames(AwayTeams))
+colnames(AwayTeams) <- gsub("opponent","Home",colnames(AwayTeams))
+#Trim away redundant columns from Away teams
+AwayTeams <- AwayTeams[-c(1,2,38:42)]
+Joined <- merge(x = HomeTeams, y = AwayTeams, by = "UniqueGameID") 
+Joined <- Joined[order(Joined$UniqueGameID),]
+tmpHome <- data.matrix(Joined[c(4:38)])
+tmpAway <- data.matrix(Joined[c(44:78)])
+DifferentialMatrix <- tmpHome - tmpAway
+tmpColumnNames <- colnames(Joined)[4:38]
+tmpColumnNames <- gsub("Home","Delta",tmpColumnNames)
+#Join up the differential stats with the game identifiers 
+tmpDiff <- data.frame(DifferentialMatrix)
+colnames(tmpDiff) <- tmpColumnNames
+tmpJoiner <- Joined[c(1,39:43)]
+DifferentialDF <- cbind(tmpJoiner, tmpDiff)
+#we sorted the dataset so we have each teams game in chronological order
+DifferentialDF <- DifferentialDF[order(DifferentialDF$Home,DifferentialDF$date),]
+DifferentialDF[5:6] <- lapply(DifferentialDF[5:6], function(x) as.numeric(x))
+DifferentialDF$Delta_Score <- DifferentialDF$HomeScore - DifferentialDF$AwayScore
+DifferentialDF <- subset(DifferentialDF, select = -c(UniqueGameID,date,Home,Away,HomeScore,AwayScore))
+#The last step is to calculate the 5 game rolling average for each team 
+tmp <- DifferentialDF
+library(zoo)
+tmp[1:35] <- lapply(DifferentialDF[1:35], function(x) rollmean(x = x, k = 5, align = "right", fill = NA))
+DifferentialDF_MA5 <- na.omit(tmp)
+DifferentialDF_MA5[1:5,1:5]
+head(DifferentialDF_MA5)
+```
+
+We have finally created a dataframe which has the rolling average in 35 statistics over the home teams previous 5 games and the corresponding net points in the game. And most importantly **These stats will be available at the beginning of each game, and can be used to actually predict game outcomes**. This wil be addressed in the next notebook.
