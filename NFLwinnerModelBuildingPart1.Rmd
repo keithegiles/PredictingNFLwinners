@@ -1,7 +1,8 @@
 ---
 output:
-  html_document: default
+  pdf_document: default
   html_notebook: default
+  html_document: default
 ---
 ###Model Building for NFL Winners - part1
 Build multiple predictive models by loading **DifferentialStats.tsv** that was generated in **DataProcessing.tsv**.  
@@ -15,11 +16,12 @@ The first goal is to try and just predict the winner.  This will all be done wit
 ```{r separate train/dev from test, eval = F}
 DifferentialStats$date <- as.character(DifferentialStats$date)
 DifferentialStats$date <- as.Date(DifferentialStats$date, "%Y-%m-%d")
-DifferentialStats$Winner <- ifelse(DifferentialStats$Delta_Score > 0, 1,0)
-TrainDev <- subset(DifferentialStats, date < "2017-03-01", select = -c(Delta_Score))
-Test <- subset(DifferentialStats, date > "2017-03-01", select = -c(Delta_Score))
-TrainDev <- subset(TrainDev, select = -c(date))
-Test <- subset(Test, select = -c(date))
+DifferentialStats$Winner <- ifelse(DifferentialStats$NetScore > 0, 1,0)
+TrainDev <- subset(DifferentialStats, date < "2017-03-01")
+Test <- subset(DifferentialStats, date > "2017-03-01")
+TrainDev <- subset(TrainDev, select = -c(date_MA5,NetScore,date))
+Test <- subset(Test, select = -c(NetScore,date_MA5,date))
+colnames(TrainDev)
 ```
 
 
@@ -35,18 +37,18 @@ I'm going to try and build the following models:
 #set the random seed generator
 set.seed(1)
 #shuffle the Train/Dev TrainingSet
-TrainDevShuffled <- TrainDev[sample(nrow(TrainDev)),]
+TrainDevShuffled <- na.omit(TrainDev[sample(nrow(TrainDev)),])
 #90% train
-xtrain <- head(TrainDevShuffled[1:35],nrow(TrainDevShuffled) *.9)
-ytrain <- head(TrainDevShuffled[c(36)],nrow(TrainDevShuffled)*.9)
+xtrain <- head(TrainDevShuffled[1:36],nrow(TrainDevShuffled) *.9)
+ytrain <- head(TrainDevShuffled[c(37)],nrow(TrainDevShuffled)*.9)
 #10%Dev
-xdev <- tail(TrainDevShuffled[1:35],nrow(TrainDevShuffled) *.1)
-ydev <- tail(TrainDevShuffled[c(36)], nrow(TrainDevShuffled) * .1)
+xdev <- tail(TrainDevShuffled[1:36],nrow(TrainDevShuffled) *.1)
+ydev <- tail(TrainDevShuffled[c(37)], nrow(TrainDevShuffled) * .1)
 #Convert the dataframes into matrix
-#xtrainMat <- data.matrix(xtrain)
-#xdevMat <- data.matrix(xdev)
-#ytrainMat <- ytrain
-#ydevMat <- data.matrix(ydev)
+xtrainMat <- data.matrix(xtrain)
+xdevMat <- data.matrix(xdev)
+ytrainMat <- ytrain
+ydevMat <- data.matrix(ydev)
 ```
 
 
@@ -55,16 +57,19 @@ library(randomForest)
 library(parallel)
 library(doParallel)
 registerDoParallel(cores = 20)
-RFmodel <- foreach(ntree=rep(25,20), .combine = combine, .packages = 'randomForest') %dopar% randomForest(x = xtrain, y = ytrain, ntree = ntree, mtry = sqrt(ncol(xtrain)))
+RFmodel <- foreach(ntree=rep(25,20), .combine = combine, 
+.packages = 'randomForest') %dopar% randomForest(x = xtrain, 
+y = as.factor(ytrain$Winner), ntree = ntree, mtry = sqrt(ncol(xtrain)))
 yhatRF <- predict(RFmodel, xdev)
-RFAccuracy <- sum(yhatRF == ydev)/length(ydev)*100
+RFAccuracy <- sum(yhatRF == ydev$Winner)/length(ydev$Winner)*100
 RFAccuracy
-TruePositives <- 
 ```
 
 ```{r xgboost model, eval = F}
 library(xgboost)
-XGBmodel <- xgboost(data = data.matrix(xtrain),label = ytrain$Winner, nrounds = 500, verbose = F,objective="binary:logistic")
+XGBmodel <- xgboost(data = data.matrix(xtrain),
+          label = ytrain$Winner, nrounds = 500, 
+          verbose = F,objective="binary:logistic")
 yhatXG <- ifelse(predict(XGBmodel, xdevMat) > .5, 1,0)
 XGAccuracy <- sum(yhatXG == ydev$Winner)/length(ydev$Winner)*100
 XGAccuracy
@@ -72,7 +77,9 @@ XGAccuracy
 
 ```{r ExtraTrees, eval = F}
 library(extraTrees)
-XTreesLaborModel <- extraTrees(x = xtrain, y = ytrain$Winner, ntree = 100, mtry = sqrt(ncol(xtrain)), nodesize = 5,numRandomCuts = 1, evenCuts = FALSE, numThreads = 20)
+XTreesLaborModel <- extraTrees(x = xtrain,
+y = ytrain$Winner, ntree = 100, mtry = sqrt(ncol(xtrain)), 
+nodesize = 5,numRandomCuts = 1, evenCuts = FALSE, numThreads = 20)
 yhatXT <- ifelse(predict(XTreesLaborModel, xdev) > .5, 1, 0)
 XT_accuracy <- sum(yhatXT  == ydev$Winner)/length(ydev$Winner) *100
 XT_accuracy
@@ -89,19 +96,21 @@ SVM_accuracy
 ```{r logistic regression, eval = F}
 Train <- cbind(xtrain, ytrain)
 Dev <- cbind(xdev, ydev)
-LogisticReg <- glm(Winner ~., data = Train, family = binomial(link = "logit"))
+LogisticReg <- glm(Winner ~., 
+        data = Train, family = binomial(link = "logit"))
 yhatLogisticReg <- ifelse(predict(LogisticReg, Dev)> .5,1,0)
-LogisticAccuracy <- sum(yhatLogisticReg == ydev$Winner)/length(ydev$Winner) * 100
+LogisticAccuracy <-
+sum(yhatLogisticReg == ydev$Winner)/length(ydev$Winner) * 100
 LogisticAccuracy
 ```
 
  Model| Accuracy      
 |--|--
-| Random Forest |  68.4%   
-| XG boost |    66.2%    
-| Extra Trees | 68.9% 
-| SVM         | 59.99%
-| Logistic Accuracy | 70.1%
+| Random Forest |  67.9%   
+| XG boost |    65.8%    
+| Extra Trees | 68.8% 
+| SVM         | 57.5%
+| Logistic Accuracy | 68.1%
 
 These results indicate that none of these models are very good.  I would have expected to do better considering that we aren't trying to predict the game against the spread.  I could look at **precision** and **recall** to try and determine which models are the best, but since we aren't anywhere near a useful accuracy I'm going to keep feature engineering.  The best way to do this is to determine what features are the most important ones from the Random Forest model
 
@@ -111,4 +120,72 @@ Importance$Features <- rownames(Importance)
 Importance <- Importance[order(-Importance$MeanDecreaseGini),]
 head(Importance)
 ```
+Typically dropping columns from random forest models doesn't help, but we'll try it anyway.  I'll drop the last 7 columns, which all head a ***MeanDecreaesGini** less than 100.  
+```{r drop features, eval = F}
+reducedFeatures <- rownames(head(Importance,30))
+TrainDevShuffledReduced <- subset(TrainDevShuffled, select = c(reducedFeatures))
+#set the random seed generator
+set.seed(1)
+#shuffle the Train/Dev TrainingSet
+TrainDevShuffledReduced <- na.omit(TrainDev[sample(nrow(TrainDev)),])
+#90% train
+xtrain <- head(TrainDevShuffled[1:36],nrow(TrainDevShuffled) *.9)
+ytrain <- head(TrainDevShuffled[c(37)],nrow(TrainDevShuffled)*.9)
+#10%Dev
+xdev <- tail(TrainDevShuffled[1:36],nrow(TrainDevShuffled) *.1)
+ydev <- tail(TrainDevShuffled[c(37)], nrow(TrainDevShuffled) * .1)
+#Convert the dataframes into matrix
+xtrainMat <- data.matrix(xtrain)
+xdevMat <- data.matrix(xdev)
+ytrainMat <- ytrain
+ydevMat <- data.matrix(ydev)
+```
+
+```{r RandomForest, eval = F}
+library(randomForest)
+library(parallel)
+library(doParallel)
+registerDoParallel(cores = 20)
+RFmodel <- foreach(ntree=rep(25,20), .combine = combine, 
+.packages = 'randomForest') %dopar% randomForest(x = xtrain, 
+y = as.factor(ytrain$Winner), ntree = ntree, mtry = sqrt(ncol(xtrain)))
+yhatRF <- predict(RFmodel, xdev)
+RFAccuracy <- sum(yhatRF == ydev$Winner)/length(ydev$Winner)*100
+RFAccuracy
+```
+
+```{r xgboost model, eval = F}
+library(xgboost)
+XGBmodel <- xgboost(data = data.matrix(xtrain),
+          label = ytrain$Winner, nrounds = 500, 
+          verbose = F,objective="binary:logistic")
+yhatXG <- ifelse(predict(XGBmodel, xdevMat) > .5, 1,0)
+XGAccuracy <- sum(yhatXG == ydev$Winner)/length(ydev$Winner)*100
+XGAccuracy
+```
+
+```{r ExtraTrees, eval = F}
+library(extraTrees)
+XTreesLaborModel <- extraTrees(x = xtrain,
+y = ytrain$Winner, ntree = 100, mtry = sqrt(ncol(xtrain)), 
+nodesize = 5,numRandomCuts = 1, evenCuts = FALSE, numThreads = 20)
+yhatXT <- ifelse(predict(XTreesLaborModel, xdev) > .5, 1, 0)
+XT_accuracy <- sum(yhatXT  == ydev$Winner)/length(ydev$Winner) *100
+XT_accuracy
+```
+
+```{r logistic regression, eval = F}
+Train <- cbind(xtrain, ytrain)
+Dev <- cbind(xdev, ydev)
+LogisticReg <- glm(Winner ~., 
+        data = Train, family = binomial(link = "logit"))
+yhatLogisticReg <- ifelse(predict(LogisticReg, Dev)> .5,1,0)
+LogisticAccuracy <-
+sum(yhatLogisticReg == ydev$Winner)/length(ydev$Winner) * 100
+LogisticAccuracy
+```
+
+A 68% accuracy would correspond to a record of 68-32 over 100 games. This would be hugely profitable.  Of course, there aren't really many options to wager money on games straight-up.  Instead, this model can be used as the beginning of an approach to predict the outcome of games with the spread added.  There are two ways to do that, one is to convert this data into a regression model and try to predict the net points. The other is to include the actual given latest line into the model and continue with a classification problem. The historical spread data is not available in this dataset and requires merging with a different dataset.  This will be addressed in a later project. In part2 I'll try to generate a regression model, convert this to a classification problem, and see if it can outpeform the original approach.  
+
+```{r create matrix for regression, eval = F}
 

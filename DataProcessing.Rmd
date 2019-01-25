@@ -112,15 +112,12 @@ From the **DifferentialDF** dataset we now need to calculate the rolling average
 #Calculate the 5 game rolling average for each team
 DifferentialDF_MA5 <- DifferentialDF
 library(zoo)
-DifferentialDF_MA5[2:36] <- lapply(DifferentialDF[2:36], function(x) rollmean(x = x, k = 5, align = "right", fill = NA))
+DifferentialDF_MA5[2:37] <- lapply(DifferentialDF[2:37], function(x) rollmean(x = x, k = 5, align = "right", fill = NA))
 #add the actual score to regress against alongside the rolling average of score differential 
 DifferentialDF_MA5 <- cbind(DifferentialDF[c(37)],DifferentialDF_MA5)
-#write.table(DifferentialDF_MA5, "/home/kegiles/ToyData/PredictingNFLwinners/DifferentialStats.tsv",sep = "\t",row.names = F,col.names = T, quote = F)
-colnames(DifferentialDF_MA5) <- c("DeltaActualScore",paste0(colnames(DifferentialDF_MA5)[2:38],"_MA5"))
-colnames(DifferentialDF_MA5)[2:38]<- gsub("Delta_","",colnames(DifferentialDF_MA5)[2:38])
-colnames(DifferentialDF_MA5)[1] <- "NetScore"
-DifferentialDF_MA5 <- DifferentialDF_MA5[-c(2)]
-colnames(DifferentialDF_MA5)
+colnames(DifferentialDF_MA5) <- c("NetScore",paste0(colnames(DifferentialDF_MA5)[2:38],"_MA5"))
+#colnames(DifferentialDF_MA5)
+write.table(DifferentialDF_MA5, file = "DifferentialStats.tsv", col.names = T, row.names = F, quote = F, sep = "\t")
 ```
 
 We have finally created a dataframe which has the rolling average in 35 statistics over the home teams previous 5 games and the corresponding net points in the game. And most importantly **These stats will be available at the beginning of each game, and can be used to actually predict game outcomes**. This wil be addressed in the next notebook.
