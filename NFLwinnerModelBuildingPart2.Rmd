@@ -1,0 +1,121 @@
+---
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document: default
+---
+###Model Building for NFL Winners - part1
+Build multiple predictive models by loading **DifferentialStats.tsv** that was generated in **DataProcessing.tsv**.  
+```{r load DifferentialStats.tsv, eval = F}
+DifferentialStats <- read.table("./DifferentialStats.tsv",, header =T)
+head(DifferentialStats)
+```
+
+The first goal is to try and just predict the winner.  This will all be done with respect to the Home team, by creating a new variable called "Winner", coded with a 1 if the HomeTeam won or a 0 if the AwayTeam won.  I'll create a train/dev/test split.  The Train and Dev sets will be generated from 1950 through the 2016 season.  The test set will be whatever games are in this dataset from the 2017 season.  
+
+```{r separate train/dev from test, eval = F}
+DifferentialStats$date <- as.character(DifferentialStats$date)
+DifferentialStats$date <- as.Date(DifferentialStats$date, "%Y-%m-%d")
+TrainDev <- subset(DifferentialStats, date < "2017-03-01")
+Test <- subset(DifferentialStats, date > "2017-03-01")
+TrainDev <- subset(TrainDev, select = -c(date_MA5,date))
+Test <- subset(Test, select = -c(date_MA5,date))
+colnames(TrainDev)
+```
+
+
+I'm going to try and build the following models: 
+
+1.    RandomForest
+2.    XG Boost
+3.    ExtraTrees
+4.    SVM
+5.    Logistic Regression
+
+```{r create matrices to input into model, eval = F}
+#set the random seed generator
+set.seed(1)
+#shuffle the Train/Dev TrainingSet
+TrainDevShuffled <- na.omit(TrainDev[sample(nrow(TrainDev)),])
+#90% train
+xtrain <- head(TrainDevShuffled[2:37],nrow(TrainDevShuffled) *.9)
+ytrain <- head(TrainDevShuffled[c(1)],nrow(TrainDevShuffled)*.9)
+#10%Dev
+xdev <- tail(TrainDevShuffled[2:37],nrow(TrainDevShuffled) *.1)
+ydev <- tail(TrainDevShuffled[c(1)], nrow(TrainDevShuffled) * .1)
+#Convert the dataframes into matrix
+xtrainMat <- data.matrix(xtrain)
+xdevMat <- data.matrix(xdev)
+ytrainMat <- ytrain
+ydevMat <- data.matrix(ydev)
+```
+
+
+```{r RandomForest, eval = F}
+library(randomForest)
+library(parallel)
+library(doParallel)
+registerDoParallel(cores = 20)
+#RFmodel <- foreach(ntree=rep(25,20), .combine = combine, .packages = 'randomForest') %dopar% randomForest(x = xtrain, y = ytrain$NetScore, ntree = ntree, mtry = sqrt(ncol(xtrain)))
+yhatRF <- predict(RFmodel, xdev)
+RFresults <- as.data.frame(cbind(yhatRF, ydev$NetScore))
+colnames(RFresults)<- c("PredictedSpread","ActualSpread")
+RFresults$PredictedWinner <- ifelse(RFresults$PredictedSpread > 0,"Home","Away")
+RFresults$ActualWinner <- ifelse(RFresults$ActualSpread > 0, "Home","Away")
+RFresults$Accuracy <- ifelse(RFresults$PredictedWinner == RFresults$ActualWinner,1,0)
+sum(RFresults$Accuracy)/nrow(RFresults)*100
+```
+
+```{r xgboost model, eval = F}
+library(xgboost)
+XGBmodel <- xgboost(data = data.matrix(xtrain),
+          label = ytrain$NetScore, nrounds = 500, 
+          verbose = F)
+yhatXG <- ifelse(predict(XGBmodel, xdevMat) > .5, 1,0)
+XGresults <- as.data.frame(cbind(yhatXG, ydev$NetScore))
+colnames(XGresults)<- c("PredictedSpread","ActualSpread")
+XGresults$PredictedWinner <- ifelse(XGresults$PredictedSpread > 0,"Home","Away")
+XGresults$ActualWinner <- ifelse(XGresults$ActualSpread > 0, "Home","Away")
+XGresults$Accuracy <- ifelse(XGresults$PredictedWinner == XGresults$ActualWinner,1,0)
+sum(XGresults$Accuracy)/nrow(XGresults)*100
+```
+
+```{r ExtraTrees, eval = F}
+library(extraTrees)
+XTreesLaborModel <- extraTrees(x = xtrain,
+y = ytrain$NetScore, ntree = 100, mtry = sqrt(ncol(xtrain)), 
+nodesize = 5,numRandomCuts = 1, evenCuts = FALSE, numThreads = 20)
+yhatXT <- predict(XTreesLaborModel, xdev)
+XTresults <- as.data.frame(cbind(yhatXT, ydev$NetScore))
+colnames(XTresults)<- c("PredictedSpread","ActualSpread")
+XTresults$PredictedWinner <- ifelse(XTresults$PredictedSpread > 0,"Home","Away")
+XTresults$ActualWinner <- ifelse(XTresults$ActualSpread > 0, "Home","Away")
+XTresults$Accuracy <- ifelse(XTresults$PredictedWinner == XTresults$ActualWinner,1,0)
+sum(XTresults$Accuracy)/nrow(XTresults)*100
+```
+
+
+```{r linear regression, eval = F}
+Train <- cbind(xtrain, ytrain)
+Dev <- cbind(xdev, ydev)
+LinearModel <- lm(NetScore ~., data = Train)
+yhatLin <- predict(LinearModel, Dev)
+Linresults <- as.data.frame(cbind(yhatLin, ydev$NetScore))
+colnames(Linresults)<- c("PredictedSpread","ActualSpread")
+Linresults$PredictedWinner <- ifelse(Linresults$PredictedSpread > 0,"Home","Away")
+Linresults$ActualWinner <- ifelse(Linresults$ActualSpread > 0, "Home","Away")
+Linresults$Accuracy <- ifelse(Linresults$PredictedWinner == Linresults$ActualWinner,1,0)
+sum(Linresults$Accuracy)/nrow(Linresults)*100
+```
+
+
+
+
+ Model| Accuracy      
+|--|--
+| Random Forest |  69.0%   
+| XG boost |    64.9%    
+| Extra Trees | 68.7% 
+| LinearReg  | 68.7%
+
+The Regression approach had a very subtle  improvement over the direct classification. However, we can use these regression models in conjunction with the spread now.
