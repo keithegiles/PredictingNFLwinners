@@ -9,3 +9,5 @@ To follow the data science thought process and corresponding data processing pip
       c.    How to calculate the stat differential (home stats - away stats) for each game
       d.    How to calculate the rolling average over the last 5 games for each team
 2.    **DifferentialStats.tsv** is the final output from **DataProcessing.Rmd** and should be used to build the model.
+3.    **NFLwinnerModelBuildingPart1.Rmd** is the first attempt to build a model to predict winners.  
+4.    **NFLwinnerModelBuildingPart1.pdf.pdf** is a pdf file of the markdown that is easier to follow
