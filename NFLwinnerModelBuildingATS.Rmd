@@ -1,0 +1,91 @@
+---
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document: default
+---
+###Model Building for NFL Winners - part1
+Build multiple predictive models by loading **DifferentialStats.tsv** that was generated in **DataProcessing.tsv**.  
+```{r load DifferentialStats.tsv, eval = F}
+setwd("/home/kegiles/ToyData/PredictingNFLwinners/")
+DifferentialStats <- read.table("../DifferentialStatsForSpread.tsv",, header =T)
+SpreadData <- read.table("/home/kegiles/ToyData/PredictingNFLwinners/SpreadRegSeason.tsv", sep = "\t", header = T)
+```
+
+The spread data was purchased and is in pretty much the same format it came in, except for my creation of the unique game ID field, that will be used to join the stats data with teh spread data.  We will then need to create another field which shows if the home team covered the closing spread. Then we can start building some models.
+
+```{r joining datasets, eval=F}
+StatsAndSpread <- merge(x = DifferentialStats, y = SpreadData, by.x = "UniqueGameID", by.y = "GameID")
+#The "Away" spread data is redundant for the spread (not so for moneyline).  So we'll drop those fields.
+#We can also drop the team data, and score, since we are only interested in point spread, and we already have that data
+StatsAndSpread <- StatsAndSpread[-c(40:44,47:60)]
+HomeFavorites <- subset(StatsAndSpread, HomeClosingSpread < 0)
+AwayFavorites <- subset(StatsAndSpread, HomeClosingSpread > 0)
+PickEms <- subset(StatsAndSpread, HomeClosingSpread == 0)
+HomeFavorites$Cover <- ifelse(HomeFavorites$NetScore > abs(HomeFavorites$HomeClosingSpread), 1,0)
+AwayFavorites$Cover <- ifelse((AwayFavorites$NetScore + AwayFavorites$HomeClosingSpread) > 0, 1,0)
+PickEms$Cover <- ifelse(PickEms$NetScore > 0,1,0)
+StatsAndSpread <- rbind(HomeFavorites,AwayFavorites,PickEms)
+#I want to add another feature, called the spread movement. This is number that captures the overall betting patterns and any changes in game conditions, including injuries, etc.
+StatsAndSpread$Movement <- StatsAndSpread$HomeClosingSpread - StatsAndSpread$HomeOpeningSpread
+```
+I'd like to see what the distribution of line changes are 
+```{r viz of line changes, eval = F}
+hist(StatsAndSpread$Movement)
+```
+
+The line changes are normally distributed, but how does this correlate with the home team covering?
+```{r EDA of line changes, eval = F}
+StatsAndSpreadShuffled <- StatsAndSpread[sample(nrow(StatsAndSpread)),]
+Train <- head(StatsAndSpreadShuffled, nrow(StatsAndSpreadShuffled)*.9)
+Test <- tail(StatsAndSpreadShuffled, nrow(StatsAndSpreadShuffled)*.1)
+xtrain <- Train[c(4:41,43)]
+ytrain <- as.factor(Train$Cover)
+xtest <- Test[c(4:41,43)]
+ytest <- as.factor(Test$Cover)
+```
+
+```{r Model building, eval = F}
+library(randomForest)
+library(parallel)
+library(doParallel)
+registerDoParallel(cores = 20)
+RFmodel <- foreach(ntree=rep(25,20), .combine = combine, .packages = 'randomForest') %dopar% randomForest(x = xtrain, y = ytrain, ntree = ntree, mtry = sqrt(ncol(xtrain)))
+Yhat <- predict(RFmodel, xtest)
+table(Yhat== ytest)
+```
+
+The Extra Trees model usually works really well
+```{r ExtraTrees, eval= F}
+library(extraTrees)
+ETmodel <- extraTrees(x = xtrain, y = ytrain, ntree = 100)
+YhatET <- predict(ETmodel, xtest)
+table(YhatET == ytest)
+```
+
+```{r logisticRegression, eval= F}
+TrainLogModel <- cbind(ytrain,xtrain)
+TestLogModel <- cbind(ytest, xtest)
+TestLogModel$ytest <- as.numeric(TestLogModel$ytest)
+TestLogModel$ytest <- TestLogModel$ytest -1
+LogModel <- glm(ytrain ~ . , data = TrainLogModel, family = binomial(),)
+Prediction <- ifelse(predict(LogModel, TestLogModel,type = "response") > .5, 1,0)
+YhatRaw <- predict(LogModel, TestLogModel, type = "response")
+PredictionDF <- as.data.frame(cbind(TestLogModel$ytest,YhatRaw,Prediction))
+colnames(PredictionDF)<- c("ActualResult","Raw","Prediction")
+PredictionDF$Probability <- ifelse(PredictionDF$Raw > .5, PredictionDF$Raw, 1 - PredictionDF$Raw)
+```
+
+
+```{r strategy development, eval = F}
+PredictionDF <- PredictionDF[order(-PredictionDF$Probability),]
+PredictionDF$eCDF <- cumsum(PredictionDF$Probability)/sum(PredictionDF$Probability)
+PredictionDF$CumulativeMean <- cumsum(PredictionDF$Probability)/seq_along(PredictionDF$Probability)
+plot(PredictionDF$Probability, PredictionDF$CumulativeMean, type = "l", ylim = c(0,1), xlim = c(.5,1),ylab = "Actual Prediction Accuracy", xlab = "Estimated Prediction Accuracy", col = "red")
+par(new=T)
+plot(PredictionDF$Probability, PredictionDF$eCDF, type = "l", lty = 2, xaxt = "no", xlab=  "",yaxt = "n", ylab = "", col = "blue")
+axis(4)
+#mtext("Test", side = 4, line = 3)
+abline(h=.5, lty = 4)
+```
+
